@@ -1,0 +1,173 @@
+from cmu_112_graphics import *
+from dataclasses import make_dataclass
+import random
+from pydub import * 
+import simpleaudio as sa
+import numpy as np
+import time
+
+Circle = make_dataclass('Circle', ['cx', 'cy', 'r', 'index'])
+ApproachCircle = make_dataclass('ApproachCircle', ['cx', 'cy', 'r', 'index', 'dr']) 
+
+def appStarted(app):
+    startGame(app)
+
+def initializeScoreInfo(app):
+    app.score = 0
+    app.streak = 0
+    app.longestStreak = 0
+    app.circlePerfectHits = 0
+    app.circleCloseHits = 0
+    app.circleMisses = 0
+
+def startGame(app):
+    app.circles = []
+    app.approachCircles = []
+    app.radius = min(app.width, app.height)/10
+    app.approachCircleRadius = app.radius * 3 
+    app.song = 'Illenium - Fractures (feat. Nevve).wav'
+    app.sound = getSound(app.song)
+    app.bpm = 160 #This is for app.song
+    app.timerDelay = 5
+    app.timeStart = time.time()
+    app.timePerCircle = millisecondsPerCircle(app) #how frequently circles should be tapped
+    app.dr = velocityOfApproachCircle(app) # based on what app.radius is (mathematically)
+    app.paused = False
+    playSound(app.sound)
+    initializeScoreInfo(app)
+    #make difficulties here
+
+def millisecondsPerCircle(app):
+    beatsPerSecond = app.bpm/60
+    secondsPerCircle = 1/beatsPerSecond
+    return int(secondsPerCircle * 1000)
+
+def velocityOfApproachCircle(app):
+    distance = app.approachCircleRadius - app.radius
+    time = app.timePerCircle / app.timerDelay #FPS kinda deal
+    return distance/time
+
+#The 3 following functions from TA audio lecture (Arjan bedi)
+def getSound(AudioFile):  
+    return AudioSegment.from_wav(AudioFile)
+
+def lengthSound(sound): 
+    return sound.duration_seconds
+
+def playSound(sound):
+    rawAudioData = sound.raw_data
+    np_array = np.frombuffer(rawAudioData, dtype=np.int16)
+    wave_obj = sa.WaveObject(np_array, 2, 2, 44100)
+    return wave_obj.play()
+    #returns play_obj
+
+def mouseInCircle(x, y, circle):
+    return (((circle.cx - x)**2) + ((circle.cy - y)**2))**0.5 <= circle.r 
+
+def createCircle(app):
+    if len(app.circles) < 4: # just to control how many circles happen...
+        cx = random.randint(0+app.radius, app.width-app.radius)
+        cy = random.randint(0+app.radius, app.height-app.radius)
+        newCircle = Circle(cx=cx, cy=cy, r=app.radius, index=len(app.circles))
+        app.circles.append(newCircle)
+        createApproachCircle(app, newCircle, cx, cy, app.radius)
+
+def createApproachCircle(app, circle, cx, cy, r):
+    newApproachCircle = ApproachCircle(cx=cx, cy=cy, r=app.approachCircleRadius, 
+                               index=len(app.approachCircles), dr=app.dr)
+    app.approachCircles.append(newApproachCircle)
+
+def timerFired(app):
+    if app.paused == False:
+        timeElapsed = time.time() - app.timeStart
+        timeElapsed = timeElapsed * 1000 #make into milliseconds
+        if 0 < timeElapsed % app.timePerCircle < 15: #time elapsed is close to when you want new circle
+            createCircle(app)
+        for circle in app.approachCircles:
+            if checkCircleIllegal(app, circle):
+                removeCircle(app, circle)
+                changeScore(app, 'miss')
+            if circle.r > 0:
+                circle.r -= circle.dr
+
+def keyPressed(app, event):
+    if event.key == 'p':
+        app.paused = not app.paused
+    if event.key == 'r':
+        startGame(app)
+
+def mousePressed(app, event):
+    cx = event.x
+    cy = event.y
+    for circle in app.circles:
+        if mouseInCircle(cx, cy, circle):
+            checkRadiusDiff(app, circle)
+            removeCircle(app, circle)
+
+def checkCircleIllegal(app, circle):
+    approachCircle = app.approachCircles[circle.index]
+    tgtCircle = app.circles[circle.index]
+    radiusDiff = approachCircle.r / tgtCircle.r #use ratio to determine legality
+    if radiusDiff < 0.5:
+        return True
+    else:
+        return False
+
+def removeCircle(app, circle):
+    indexOfRemovedCircle = circle.index
+    app.circles.pop(indexOfRemovedCircle)
+    app.approachCircles.pop(indexOfRemovedCircle)
+    for circles in app.circles: 
+        if circles.index > indexOfRemovedCircle:
+            circles.index -= 1
+    for circles in app.approachCircles:
+        if circles.index > indexOfRemovedCircle:
+            circles.index -= 1
+
+def checkRadiusDiff(app, circle):
+    approachCircle = app.approachCircles[circle.index]
+    radiusDiff = approachCircle.r / circle.r #use ratio to determine score
+    if 0.9 < radiusDiff < 1.1: 
+        changeScore(app, 'perfectHit')
+    elif 0.7 < radiusDiff < 1.4:
+        changeScore(app, 'closeHit')
+    else:
+        changeScore(app, 'miss')
+
+def changeScore(app, hitType):
+    if hitType == 'perfectHit':
+        print("Perfect Hit")
+        app.circlePerfectHits += 1
+        app.streak += 1
+        scoreAdd = 300
+        app.score += scoreAdd + int((scoreAdd * app.streak)/25) #incorporate Difficulty
+    elif hitType == 'closeHit':
+        print("Close Hit")
+        app.circleCloseHits += 1
+        app.streak += 1
+        scoreAdd = 100
+        app.score += scoreAdd + int((scoreAdd * app.streak)/25) #incorporate Difficulty
+    elif hitType == 'miss':
+        print("Miss")
+        app.circleMisses += 1
+        if app.streak > app.longestStreak:
+            app.longestStreak = app.streak
+        app.streak = 0
+
+def redrawAll(app, canvas):
+    for circle in app.circles:
+        canvas.create_oval(circle.cx - circle.r, circle.cy - circle.r,
+                           circle.cx + circle.r, circle.cy + circle.r,
+                           width=4)
+    for circle in app.approachCircles:
+        canvas.create_oval(circle.cx - circle.r, circle.cy - circle.r,
+                           circle.cx + circle.r, circle.cy + circle.r,
+                           width=4)
+    textSizeStreak = app.height//20
+    textSizeScore = app.height//40
+    canvas.create_text(app.width*19/20, app.height*19/20, text=f'x{app.streak}',
+                       font=f'Arial {textSizeStreak}')
+    canvas.create_text(app.width*3/4, app.height*1/20, text=f'Score: {app.score}',
+                       font=f'Arial {textSizeScore}')
+
+runApp(width=1000, height=1000)
